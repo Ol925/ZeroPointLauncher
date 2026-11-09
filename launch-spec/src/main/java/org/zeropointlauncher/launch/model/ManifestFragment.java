@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.Nulls;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import org.zeropointlauncher.launch.json.JsonSupport;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -33,8 +33,9 @@ public record ManifestFragment(
     }
 
     /**
-     * 求值器唯一入口：1.13+ 的 arguments.game 非空时优先；否则按 vanilla 语义把
-     * minecraftArguments 按空白切分（不解析引号，不依赖 shell）。
+     * 求值器唯一入口：1.13+ 的 arguments.game 非空时优先；否则按旧版语义把
+     * minecraftArguments 按空白切分，双引号或单引号内的空白保留在同一 token 中。
+     * 不依赖 shell，也不处理反斜杠转义。
      */
     public List<LaunchArgument> gameArguments() {
         if (arguments != null && !arguments.game().isEmpty()) {
@@ -43,7 +44,7 @@ public record ManifestFragment(
         if (minecraftArguments == null) {
             return List.of();
         }
-        return Arrays.stream(minecraftArguments.split("\\s+"))
+        return tokenizeLegacyArguments(minecraftArguments).stream()
                 .filter(token -> !token.isEmpty())
                 .<LaunchArgument>map(LaunchArgument.Direct::new)
                 .toList();
@@ -51,6 +52,46 @@ public record ManifestFragment(
 
     public List<LaunchArgument> jvmArguments() {
         return arguments == null ? List.of() : arguments.jvm();
+    }
+
+    private static List<String> tokenizeLegacyArguments(String raw) {
+        var tokens = new ArrayList<String>();
+        var current = new StringBuilder();
+        char quote = 0;
+        boolean tokenStarted = false;
+
+        for (int i = 0; i < raw.length(); i++) {
+            char value = raw.charAt(i);
+            if (quote != 0) {
+                if (value == quote) {
+                    quote = 0;
+                } else {
+                    current.append(value);
+                }
+                tokenStarted = true;
+            } else if (value == '"' || value == '\'') {
+                quote = value;
+                tokenStarted = true;
+            } else if (Character.isWhitespace(value)) {
+                if (tokenStarted) {
+                    tokens.add(current.toString());
+                    current.setLength(0);
+                    tokenStarted = false;
+                }
+            } else {
+                current.append(value);
+                tokenStarted = true;
+            }
+        }
+
+        if (quote != 0) {
+            throw new IllegalArgumentException(
+                    "minecraftArguments 包含未闭合引号: " + raw);
+        }
+        if (tokenStarted) {
+            tokens.add(current.toString());
+        }
+        return List.copyOf(tokens);
     }
 
     private static String blankToNull(String value) {

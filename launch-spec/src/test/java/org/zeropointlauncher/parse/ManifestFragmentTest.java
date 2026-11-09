@@ -3,6 +3,7 @@ package org.zeropointlauncher.parse;
 import org.junit.jupiter.api.Test;
 import org.zeropointlauncher.launch.model.LaunchArgument;
 import org.zeropointlauncher.launch.model.Library;
+import org.zeropointlauncher.launch.model.ManifestFragment;
 import org.zeropointlauncher.launch.model.OsRule;
 import org.zeropointlauncher.launch.model.Rule;
 import org.zeropointlauncher.launch.model.RuleAction;
@@ -60,6 +61,38 @@ class ManifestFragmentTest {
                 new LaunchArgument.Direct("--version"),
                 new LaunchArgument.Direct("${version_name}")
         ), fragment.gameArguments());
+    }
+
+    @Test
+    void legacyArgumentsPreserveSpacesInsideQuotes() {
+        var fragment = new ManifestFragment(
+                "x",
+                null,
+                null,
+                "--name \"Demo Player\" --path 'C:\\Program Files\\MC' --flag",
+                null,
+                List.of());
+
+        assertEquals(List.of(
+                new LaunchArgument.Direct("--name"),
+                new LaunchArgument.Direct("Demo Player"),
+                new LaunchArgument.Direct("--path"),
+                new LaunchArgument.Direct("C:\\Program Files\\MC"),
+                new LaunchArgument.Direct("--flag")
+        ), fragment.gameArguments());
+    }
+
+    @Test
+    void unclosedLegacyQuoteIsRejected() {
+        var fragment = new ManifestFragment(
+                "x",
+                null,
+                null,
+                "--name \"Demo",
+                null,
+                List.of());
+
+        assertThrows(IllegalArgumentException.class, fragment::gameArguments);
     }
 
     @Test
