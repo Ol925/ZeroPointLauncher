@@ -3,12 +3,12 @@ package org.zeropointlauncher.launch.compiler;
 import org.junit.jupiter.api.Test;
 import org.zeropointlauncher.launch.classpath.ClientJarRef;
 import org.zeropointlauncher.launch.model.LaunchArgument;
+import org.zeropointlauncher.launch.model.Library;
 import org.zeropointlauncher.launch.model.ManifestFragment;
 import org.zeropointlauncher.launch.model.RuleContext;
 import org.zeropointlauncher.launch.parse.ManifestFragmentParser;
 import org.zeropointlauncher.launch.resolve.NativeExtractRequest;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -278,6 +278,68 @@ class LaunchPlanCompilerTest {
     }
 
     @Test
+    void modernGameArgumentsWithoutJvmRequireClasspath() {
+        var manifest = new ManifestFragment(
+                "modern-game-only",
+                null,
+                "example.Main",
+                null,
+                new ManifestFragment.ArgumentsBlock(
+                        List.of(new LaunchArgument.Direct("--demo")),
+                        List.of()),
+                List.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> LaunchPlanCompiler.compile(
+                        manifest, context("windows", "x86_64"),
+                        client("modern-game-only"), Map.of()));
+
+        assertTrue(error.getMessage().contains("Classpath"));
+    }
+
+    @Test
+    void modernArgumentsStructureWinsOverLegacyString() {
+        var manifest = new ManifestFragment(
+                "hybrid",
+                null,
+                "example.Main",
+                "--legacy",
+                new ManifestFragment.ArgumentsBlock(List.of(), List.of()),
+                List.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> LaunchPlanCompiler.compile(
+                        manifest, context("windows", "x86_64"),
+                        client("hybrid"), Map.of()));
+
+        assertTrue(error.getMessage().contains("Classpath"));
+    }
+
+    @Test
+    void legacyExplicitEmptyQuotedTokenIsPreserved() {
+        var manifest = new ManifestFragment(
+                "empty-token",
+                null,
+                "example.Main",
+                "--flag \"\" --other",
+                null,
+                List.of());
+        var plan = LaunchPlanCompiler.compile(
+                manifest, context("windows", "x86_64"),
+                client("empty-token"), Map.of());
+
+        assertEquals(List.of("--flag", "", "--other"),
+                rawPatterns(plan.gameTemplates()));
+
+        var command = plan.renderCommandLine(
+                "java", Map.of(),
+                Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";");
+        int flagIndex = command.indexOf("--flag");
+        assertEquals("", command.get(flagIndex + 1));
+        assertEquals("--other", command.get(flagIndex + 2));
+    }
+
+    @Test
     void missingPublicValueNamesTheVariable() throws Exception {
         var publicValues = new HashMap<>(legacyPublicValues());
         publicValues.remove("auth_player_name");
@@ -330,6 +392,173 @@ class LaunchPlanCompilerTest {
     }
 
     @Test
+    void nativeSelectionIssuesAbortCompilation() {
+        var nativeLibrary = new Library(
+                "example:arm-native:1",
+                null,
+                null,
+                Map.of("windows", "natives-windows-${arch}"),
+                List.of(),
+                null);
+        var manifest = new ManifestFragment(
+                "arm-native",
+                null,
+                "example.Main",
+                "--flag",
+                null,
+                List.of(nativeLibrary));
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> LaunchPlanCompiler.compile(
+                        manifest, context("windows", "arm64"),
+                        client("arm-native"), Map.of()));
+
+        assertTrue(error.getMessage().contains("example:arm-native:1"));
+        assertTrue(error.getMessage().contains("arm64"));
+    }
+
+    @Test
+    void sanitizedCommandLineMasksSessionVariables() {
+        var manifest = new ManifestFragment(
+                "session-sanitized",
+                null,
+                "example.Main",
+                "--session=${auth_session} --session prefix-${auth_session} "
+                        + "--accessToken ${auth_access_token}",
+                null,
+                List.of());
+        var plan = LaunchPlanCompiler.compile(
+                manifest, context("windows", "x86_64"),
+                client("session-sanitized"), Map.of());
+        var boundValues = Map.of(
+                "auth_session", "session-secret",
+                "auth_access_token", "token-secret");
+
+        var real = plan.renderCommandLine(
+                "java", boundValues,
+                Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";");
+        var sanitized = plan.renderSanitizedCommandLine(
+                "java", boundValues,
+                Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";");
+
+        assertTrue(real.contains("--session=session-secret"));
+        assertTrue(real.contains("prefix-session-secret"));
+        assertTrue(real.contains("token-secret"));
+        assertFalse(sanitized.contains("--session=session-secret"));
+        assertFalse(sanitized.contains("prefix-session-secret"));
+        assertFalse(sanitized.contains("token-secret"));
+        assertTrue(sanitized.contains("--session=***"));
+        assertTrue(sanitized.contains("prefix-***"));
+        assertEquals("***", sanitized.get(sanitized.indexOf("--accessToken") + 1));
+    }
+
+    @Test
+    void finalCommandLineRejectsDynamicExtraClasspathFlag() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}", "${launcher_name}"),
+                context("windows", "x86_64"),
+                client("dynamic-cp"),
+                Map.of("launcher_name", "-cp"));
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+
+        assertTrue(error.getMessage().contains("Classpath"));
+    }
+
+    @Test
+    void finalCommandLineRejectsClasspathSystemProperty() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}", "${launcher_name}"),
+                context("windows", "x86_64"),
+                client("dynamic-classpath-prop"),
+                Map.of("launcher_name", "-Djava.class.path=hack.jar"));
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+
+        assertTrue(error.getMessage().contains("java.class.path"));
+        assertTrue(error.getMessage().contains("索引"));
+        assertFalse(error.getMessage().contains("hack.jar"));
+    }
+
+    @Test
+    void finalCommandLineRejectsJarOption() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}", "-jar"),
+                context("windows", "x86_64"),
+                client("jar-option"),
+                Map.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+
+        assertTrue(error.getMessage().contains("-jar"));
+        assertTrue(error.getMessage().contains("索引"));
+    }
+
+    @Test
+    void finalCommandLineRejectsBareClasspathSystemProperty() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}", "-Djava.class.path"),
+                context("windows", "x86_64"),
+                client("bare-classpath-prop"),
+                Map.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+
+        assertTrue(error.getMessage().contains("java.class.path"));
+        assertTrue(error.getMessage().contains("索引"));
+    }
+
+    @Test
+    void finalCommandLineAllowsNonClasspathPrefixedOptions() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}", "-cpu", "-cprofile"),
+                context("windows", "x86_64"),
+                client("non-classpath-prefix"),
+                Map.of());
+
+        var command = plan.renderCommandLine(
+                "java", Map.of(),
+                Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";");
+
+        assertTrue(command.contains("-cpu"));
+        assertTrue(command.contains("-cprofile"));
+    }
+
+    @Test
+    void classpathOverrideExceptionDoesNotLeakSessionSecret() {
+        var plan = LaunchPlanCompiler.compile(
+                modernJvm("-cp", "${classpath}",
+                        "-Djava.class.path=${auth_session}"),
+                context("windows", "x86_64"),
+                client("secret-diagnostic"),
+                Map.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java",
+                        Map.of("auth_session", "super-secret-session"),
+                        Path.of(WINDOWS_LIBRARIES),
+                        Path.of(WINDOWS_VERSIONS),
+                        ";"));
+
+        assertFalse(error.getMessage().contains("super-secret-session"));
+        assertTrue(error.getMessage().contains("java.class.path"));
+        assertTrue(error.getMessage().contains("索引"));
+    }
+
+    @Test
     void sanitizedCommandLineMasksOnlyAccessToken() {
         var manifest = new ManifestFragment(
                 "sanitized",
@@ -364,21 +593,20 @@ class LaunchPlanCompilerTest {
 
     @Test
     void physicalRootContainingTargetClasspathSeparatorIsRejected() {
-        var plan = compileSimpleLegacyPlan();
-        String separator = File.pathSeparator;
-        var badRoot = Path.of("mc" + separator + "libraries");
+        var plan = compileSimpleLegacyPlan("windows", "x86_64");
+        var badRoot = Path.of("mc;libraries");
 
         var error = assertThrows(IllegalArgumentException.class,
                 () -> plan.renderCommandLine(
                         "java", Map.of(),
-                        badRoot, Path.of("versions"), separator));
+                        badRoot, Path.of("versions"), ";"));
 
         assertTrue(error.getMessage().contains("分隔符"));
     }
 
     @Test
     void linuxColonInPhysicalPathIsRejected() {
-        var plan = compileSimpleLegacyPlan();
+        var plan = compileSimpleLegacyPlan("linux", "x86_64");
 
         var error = assertThrows(IllegalArgumentException.class,
                 () -> plan.renderCommandLine(
@@ -390,7 +618,7 @@ class LaunchPlanCompilerTest {
 
     @Test
     void extraWindowsColonInJavaExecutableIsRejected() {
-        var plan = compileSimpleLegacyPlan();
+        var plan = compileSimpleLegacyPlan("windows", "x86_64");
 
         var error = assertThrows(IllegalArgumentException.class,
                 () -> plan.renderCommandLine(
@@ -398,6 +626,78 @@ class LaunchPlanCompilerTest {
                         Path.of("libraries"), Path.of("versions"), ";"));
 
         assertTrue(error.getMessage().contains("冒号"));
+    }
+
+    @Test
+    void pathSeparatorMustMatchTargetOs() {
+        var windowsPlan = compileSimpleLegacyPlan("windows", "x86_64");
+        for (String separator : List.of(":", ",")) {
+            var error = assertThrows(IllegalArgumentException.class,
+                    () -> windowsPlan.renderCommandLine(
+                            "java", Map.of(),
+                            Path.of(WINDOWS_LIBRARIES),
+                            Path.of(WINDOWS_VERSIONS),
+                            separator),
+                    separator);
+            assertTrue(error.getMessage().contains("pathSeparator"),
+                    error.getMessage());
+        }
+
+        var linuxPlan = compileSimpleLegacyPlan("linux", "x86_64");
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> linuxPlan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(LINUX_LIBRARIES),
+                        Path.of(LINUX_VERSIONS),
+                        ";"));
+        assertTrue(error.getMessage().contains("pathSeparator"));
+    }
+
+    @Test
+    void classpathEntryEndingWithWildcardIsRejected() {
+        var wildcardLibrary = new Library(
+                "example:wildcard:1",
+                null,
+                new Library.Downloads(
+                        new Library.DownloadArtifact("libs/*", "sha1", 1L, null),
+                        Map.of()),
+                null,
+                List.of(),
+                null);
+        var manifest = new ManifestFragment(
+                "wildcard",
+                null,
+                "example.Main",
+                "--flag",
+                null,
+                List.of(wildcardLibrary));
+        var plan = LaunchPlanCompiler.compile(
+                manifest, context("windows", "x86_64"),
+                client("wildcard"), Map.of());
+
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> plan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+        assertTrue(error.getMessage().contains("*"));
+
+        var clientPlan = LaunchPlanCompiler.compile(
+                new ManifestFragment(
+                        "wildcard-client",
+                        null,
+                        "example.Main",
+                        "--flag",
+                        null,
+                        List.of()),
+                context("windows", "x86_64"),
+                new ClientJarRef("wildcard/*"),
+                Map.of());
+
+        var clientError = assertThrows(IllegalArgumentException.class,
+                () -> clientPlan.renderCommandLine(
+                        "java", Map.of(),
+                        Path.of(WINDOWS_LIBRARIES), Path.of(WINDOWS_VERSIONS), ";"));
+        assertTrue(clientError.getMessage().contains("*"));
     }
 
     @Test
@@ -547,6 +847,10 @@ class LaunchPlanCompilerTest {
     }
 
     private static LaunchPlan compileSimpleLegacyPlan() {
+        return compileSimpleLegacyPlan("windows", "x86_64");
+    }
+
+    private static LaunchPlan compileSimpleLegacyPlan(String osName, String osArch) {
         var manifest = new ManifestFragment(
                 "simple",
                 null,
@@ -556,7 +860,7 @@ class LaunchPlanCompilerTest {
                 List.of());
         return LaunchPlanCompiler.compile(
                 manifest,
-                context("windows", "x86_64"),
+                context(osName, osArch),
                 new ClientJarRef("simple/simple.jar"),
                 Map.of());
     }

@@ -59,6 +59,29 @@ class ArgumentTemplateTest {
     }
 
     @Test
+    void variableCanBeEmbeddedInLargerToken() {
+        var template = ArgumentTemplate.parse("--session=prefix-${auth_session}");
+
+        assertEquals("--session=prefix-session-secret",
+                template.render(Map.of("auth_session", "session-secret")));
+    }
+
+    @Test
+    void variableCanRenderToClasspathFlag() {
+        var template = ArgumentTemplate.parse("${launcher_name}");
+
+        assertEquals("-cp", template.render(Map.of("launcher_name", "-cp")));
+    }
+
+    @Test
+    void emptyTokenRendersAsEmptyString() {
+        var template = ArgumentTemplate.parse("");
+
+        assertTrue(template.parts().isEmpty());
+        assertEquals("", template.render(Map.of()));
+    }
+
+    @Test
     void partsAreImmutable() {
         var template = ArgumentTemplate.parse("--demo");
 

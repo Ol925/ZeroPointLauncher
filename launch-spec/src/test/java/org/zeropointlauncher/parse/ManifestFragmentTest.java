@@ -83,6 +83,23 @@ class ManifestFragmentTest {
     }
 
     @Test
+    void legacyArgumentsKeepExplicitEmptyQuotedToken() {
+        var fragment = new ManifestFragment(
+                "x",
+                null,
+                null,
+                "--flag \"\" --other",
+                null,
+                List.of());
+
+        assertEquals(List.of(
+                new LaunchArgument.Direct("--flag"),
+                new LaunchArgument.Direct(""),
+                new LaunchArgument.Direct("--other")
+        ), fragment.gameArguments());
+    }
+
+    @Test
     void unclosedLegacyQuoteIsRejected() {
         var fragment = new ManifestFragment(
                 "x",

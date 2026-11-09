@@ -34,8 +34,8 @@ public record ManifestFragment(
 
     /**
      * 求值器唯一入口：1.13+ 的 arguments.game 非空时优先；否则按旧版语义把
-     * minecraftArguments 按空白切分，双引号或单引号内的空白保留在同一 token 中。
-     * 不依赖 shell，也不处理反斜杠转义。
+     * minecraftArguments 按空白切分，双引号或单引号内的空白保留在同一 token 中，
+     * 显式空引号也会保留为空 token。不依赖 shell，也不处理反斜杠转义。
      */
     public List<LaunchArgument> gameArguments() {
         if (arguments != null && !arguments.game().isEmpty()) {
@@ -45,7 +45,6 @@ public record ManifestFragment(
             return List.of();
         }
         return tokenizeLegacyArguments(minecraftArguments).stream()
-                .filter(token -> !token.isEmpty())
                 .<LaunchArgument>map(LaunchArgument.Direct::new)
                 .toList();
     }

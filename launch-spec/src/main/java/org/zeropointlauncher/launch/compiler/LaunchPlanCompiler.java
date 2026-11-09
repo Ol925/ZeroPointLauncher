@@ -72,8 +72,8 @@ public final class LaunchPlanCompiler {
      * @param clientJar         调用方指定的客户端 JAR
      * @param publicValues      编译期公开值，例如玩家名、版本名与分辨率
      * @return 不可变启动计划
-     * @throws IllegalArgumentException 主类缺失、参数变量未知、公开值缺失或
-     *                                  现代 Classpath 入口不合法
+     * @throws IllegalArgumentException 主类缺失、Native 选择失败、参数变量未知、
+     *                                  公开值缺失或现代 Classpath 入口不合法
      */
     public static LaunchPlan compile(
             ManifestFragment effectiveManifest,
@@ -96,11 +96,20 @@ public final class LaunchPlanCompiler {
         ClasspathPlan classpathPlan = ClasspathAssembler.assemble(selected, clientJar);
         NativeSelectionResult nativeSelection = LegacyNativeSelector.select(
                 selected.libraries(), target);
+        if (!nativeSelection.issues().isEmpty()) {
+            var details = nativeSelection.issues().stream()
+                    .map(issue -> issue.libraryName()
+                            + " (" + issue.targetOsKey() + "): " + issue.message())
+                    .toList();
+            throw new IllegalArgumentException(
+                    "Native 选择失败: " + String.join("; ", details));
+        }
         List<NativeExtractRequest> legacyNativeRequests = nativeSelection.requests();
 
         validatePublicValues(publicValues);
 
-        boolean legacyMode = effectiveManifest.jvmArguments().isEmpty();
+        boolean legacyMode = effectiveManifest.minecraftArguments() != null
+                && effectiveManifest.arguments() == null;
         List<String> jvmTokens;
         if (legacyMode) {
             jvmTokens = new ArrayList<>(selected.jvmTokens());
