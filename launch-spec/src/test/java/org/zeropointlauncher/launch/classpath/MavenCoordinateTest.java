@@ -62,11 +62,63 @@ class MavenCoordinateTest {
                 "group:artifact:version:",
                 "group:artifact:version@",
                 "group:artifact:version@ ",
-                "group:artifact:version@jar@extra"
+                "group:artifact:version@jar@extra",
+                "g:../../outside:1",
+                ".g:a:1",
+                "../g:a:1",
+                "g:a:../1",
+                "g:a:1:..",
+                "g:a:1:a/b",
+                "g:a:1@jar:extra",
+                "g:a:1@../evil",
+                "g:a:1@C:",
+                "g:a:1@C:/evil"
         }) {
             assertThrows(IllegalArgumentException.class,
                     () -> MavenCoordinate.parse(raw), raw);
         }
+    }
+
+    @Test
+    void constructorRejectsUnsafeFields() {
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "../../g", "a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                ".g", "a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g.", "a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g..a", "a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g/a", "a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g:a", "a", "1", Optional.empty(), "jar"));
+
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "../a", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a/b", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a\\b", "1", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "..", Optional.empty(), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "../1", Optional.empty(), "jar"));
+
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.of(".."), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.of("a/b"), "jar"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.empty(), "."));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.empty(), ".."));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.empty(), ""));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.empty(), "jar:extra"));
+        assertThrows(IllegalArgumentException.class, () -> new MavenCoordinate(
+                "g", "a", "1", Optional.empty(), "../jar"));
     }
 
     @Test

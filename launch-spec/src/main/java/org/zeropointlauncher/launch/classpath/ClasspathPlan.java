@@ -6,8 +6,9 @@ import java.util.Optional;
 /**
  * 有序 classpath 逻辑计划。
  * <p>
- * 条目均为相对路径，保留调用方给定的声明顺序与重复项；不包含平台分隔符。
- * {@link ClasspathAssembler} 产出的计划最后一项固定为客户端 JAR。
+ * 除最后一项外，条目相对于 {@code libraries} 根；最后一项是调用方指定的客户端 JAR，
+ * 相对于 {@code versions} 根，形如 {@code <versionId>/<versionId>.jar}。所有条目均为
+ * 相对路径，保留声明顺序与重复项，不包含平台分隔符。
  */
 public record ClasspathPlan(List<String> entries) {
     public ClasspathPlan {

@@ -16,7 +16,9 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ClasspathAssemblerTest {
-    private static final String CLIENT_JAR = "versions/1.20.1/1.20.1.jar";
+    private static final String MODERN_CLIENT_JAR = "1.20.1/1.20.1.jar";
+    private static final String LEGACY_CLIENT_JAR = "1.12.2/1.12.2.jar";
+    private static final String OLD_CLIENT_JAR = "1.7.10/1.7.10.jar";
 
     private final ManifestFragmentParser parser = new ManifestFragmentParser();
 
@@ -26,16 +28,17 @@ class ClasspathAssemblerTest {
                 fixture("versions/1.20.1-trimmed.json"),
                 context("linux", "x86_64"));
 
-        var plan = ClasspathAssembler.assemble(selected, new ClientJarRef(CLIENT_JAR));
+        var plan = ClasspathAssembler.assemble(
+                selected, new ClientJarRef(MODERN_CLIENT_JAR));
 
         assertEquals(List.of(
                 "com/google/code/gson/gson/2.10/gson-2.10.jar",
                 "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar",
                 "io/netty/netty-transport-native-epoll/4.1.82.Final/"
                         + "netty-transport-native-epoll-4.1.82.Final-linux-x86_64.jar",
-                CLIENT_JAR
+                MODERN_CLIENT_JAR
         ), plan.entries());
-        assertEquals(Optional.of(CLIENT_JAR), plan.clientJar());
+        assertEquals(Optional.of(MODERN_CLIENT_JAR), plan.clientJar());
         assertEquals(plan.entries(), plan.relativePaths());
     }
 
@@ -45,13 +48,14 @@ class ClasspathAssemblerTest {
                 fixture("versions/1.12.2-trimmed.json"),
                 context("windows", "x86_64"));
 
-        var plan = ClasspathAssembler.assemble(selected, new ClientJarRef(CLIENT_JAR));
+        var plan = ClasspathAssembler.assemble(
+                selected, new ClientJarRef(LEGACY_CLIENT_JAR));
 
         assertEquals(List.of(
                 "net/sf/jopt-simple/jopt-simple/5.0.3/jopt-simple-5.0.3.jar",
                 "org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/"
                         + "lwjgl-platform-2.9.4-nightly-20150209.jar",
-                CLIENT_JAR
+                LEGACY_CLIENT_JAR
         ), plan.entries());
         assertFalse(plan.entries().stream()
                 .anyMatch(entry -> entry.contains("jinput-platform")));
@@ -68,9 +72,10 @@ class ClasspathAssemblerTest {
         assertFalse(selected.libraries().isEmpty());
         assertTrue(selected.libraries().stream().allMatch(library -> library.artifact() == null));
 
-        var plan = ClasspathAssembler.assemble(selected, new ClientJarRef(CLIENT_JAR));
+        var plan = ClasspathAssembler.assemble(
+                selected, new ClientJarRef(OLD_CLIENT_JAR));
 
-        assertEquals(List.of(CLIENT_JAR), plan.entries());
+        assertEquals(List.of(OLD_CLIENT_JAR), plan.entries());
     }
 
     @Test
@@ -78,6 +83,21 @@ class ClasspathAssemblerTest {
         var plain = nameOnly("com.example:legacy-lib:1.2.3");
         var classified = nameOnly("com.example:legacy-native:1.2.3:natives-linux@zip");
         var artifact = artifactLibrary("com.example:modern:2.0", "custom/renamed.jar");
+
+        var plan = ClasspathAssembler.assemble(
+                inputs(plain, classified, artifact),
+                new ClientJarRef(MODERN_CLIENT_JAR));
+
+        assertEquals(List.of(
+                "com/example/legacy-lib/1.2.3/legacy-lib-1.2.3.jar",
+                "com/example/legacy-native/1.2.3/legacy-native-1.2.3-natives-linux.zip",
+                "custom/renamed.jar",
+                MODERN_CLIENT_JAR
+        ), plan.entries());
+    }
+
+    @Test
+    void declaredEmptyDownloadsIsRejectedWithoutMavenFallback() {
         var emptyDownloads = new Library(
                 "com.example:empty-downloads:1",
                 null,
@@ -86,17 +106,12 @@ class ClasspathAssemblerTest {
                 List.of(),
                 null);
 
-        var plan = ClasspathAssembler.assemble(
-                inputs(plain, classified, artifact, emptyDownloads),
-                new ClientJarRef(CLIENT_JAR));
+        var error = assertThrows(IllegalArgumentException.class,
+                () -> ClasspathAssembler.assemble(
+                        inputs(emptyDownloads), new ClientJarRef(MODERN_CLIENT_JAR)));
 
-        assertEquals(List.of(
-                "com/example/legacy-lib/1.2.3/legacy-lib-1.2.3.jar",
-                "com/example/legacy-native/1.2.3/legacy-native-1.2.3-natives-linux.zip",
-                "custom/renamed.jar",
-                "com/example/empty-downloads/1/empty-downloads-1.jar",
-                CLIENT_JAR
-        ), plan.entries());
+        assertTrue(error.getMessage().contains("empty-downloads"));
+        assertTrue(error.getMessage().contains("downloads"));
     }
 
     @Test
@@ -104,9 +119,9 @@ class ClasspathAssemblerTest {
         var artifact = artifactLibrary("com.example:mapped:1", "custom/renamed.jar");
 
         var plan = ClasspathAssembler.assemble(
-                inputs(artifact), new ClientJarRef(CLIENT_JAR));
+                inputs(artifact), new ClientJarRef(MODERN_CLIENT_JAR));
 
-        assertEquals(List.of("custom/renamed.jar", CLIENT_JAR), plan.entries());
+        assertEquals(List.of("custom/renamed.jar", MODERN_CLIENT_JAR), plan.entries());
     }
 
     @Test
@@ -128,9 +143,10 @@ class ClasspathAssemblerTest {
                 null);
 
         var plan = ClasspathAssembler.assemble(
-                inputs(nativesOnly, classifiersOnly), new ClientJarRef(CLIENT_JAR));
+                inputs(nativesOnly, classifiersOnly),
+                new ClientJarRef(MODERN_CLIENT_JAR));
 
-        assertEquals(List.of(CLIENT_JAR), plan.entries());
+        assertEquals(List.of(MODERN_CLIENT_JAR), plan.entries());
     }
 
     @Test
@@ -139,32 +155,33 @@ class ClasspathAssemblerTest {
         var second = nameOnly("com.example:second:2");
 
         var plan = ClasspathAssembler.assemble(
-                inputs(first, second, first), new ClientJarRef(CLIENT_JAR));
+                inputs(first, second, first), new ClientJarRef(MODERN_CLIENT_JAR));
 
         assertEquals(List.of(
                 "com/example/first-1.jar",
                 "com/example/second/2/second-2.jar",
                 "com/example/first-1.jar",
-                CLIENT_JAR
+                MODERN_CLIENT_JAR
         ), plan.entries());
     }
 
     @Test
     void clientJarIsAppendedEvenWhenItDuplicatesAnEntry() {
-        var artifact = artifactLibrary("com.example:client:1", "shared/client.jar");
+        var artifact = artifactLibrary("com.example:client:1", MODERN_CLIENT_JAR);
 
         var plan = ClasspathAssembler.assemble(
-                inputs(artifact), new ClientJarRef("shared/client.jar"));
+                inputs(artifact), new ClientJarRef(MODERN_CLIENT_JAR));
 
-        assertEquals(List.of("shared/client.jar", "shared/client.jar"), plan.entries());
+        assertEquals(List.of(MODERN_CLIENT_JAR, MODERN_CLIENT_JAR), plan.entries());
     }
 
     @Test
     void emptyInputsStillProduceClientJarLast() {
-        var plan = ClasspathAssembler.assemble(inputs(), new ClientJarRef(CLIENT_JAR));
+        var plan = ClasspathAssembler.assemble(
+                inputs(), new ClientJarRef(MODERN_CLIENT_JAR));
 
-        assertEquals(List.of(CLIENT_JAR), plan.entries());
-        assertEquals(Optional.of(CLIENT_JAR), plan.clientJar());
+        assertEquals(List.of(MODERN_CLIENT_JAR), plan.entries());
+        assertEquals(Optional.of(MODERN_CLIENT_JAR), plan.clientJar());
     }
 
     @Test
@@ -173,28 +190,78 @@ class ClasspathAssemblerTest {
 
         var error = assertThrows(IllegalArgumentException.class,
                 () -> ClasspathAssembler.assemble(
-                        inputs(malformed), new ClientJarRef(CLIENT_JAR)));
+                        inputs(malformed), new ClientJarRef(MODERN_CLIENT_JAR)));
 
         assertTrue(error.getMessage().contains("not-a-coordinate"));
     }
 
     @Test
+    void unsafeArtifactPathsAreRejectedWithLibraryNameAndPath() {
+        for (String path : List.of(
+                "../outside.jar",
+                "/outside.jar",
+                "C:/outside.jar",
+                "C:outside.jar",
+                "nested\\outside.jar",
+                "nested//outside.jar",
+                "nested/ /outside.jar",
+                "nested/../outside.jar",
+                "nested/./outside.jar",
+                "nested/../../outside.jar",
+                "nested/outside.jar/",
+                ".")) {
+            var library = artifactLibrary("com.example:unsafe:1", path);
+
+            var error = assertThrows(IllegalArgumentException.class,
+                    () -> ClasspathAssembler.assemble(
+                            inputs(library), new ClientJarRef(MODERN_CLIENT_JAR)),
+                    path);
+
+            assertTrue(error.getMessage().contains("com.example:unsafe:1"), path);
+            assertTrue(error.getMessage().contains(path), path);
+        }
+    }
+
+    @Test
+    void clientJarRefRejectsUnsafeRelativePaths() {
+        for (String path : List.of(
+                "../client.jar",
+                "/client.jar",
+                "C:/client.jar",
+                "C:client.jar",
+                "nested\\client.jar",
+                "nested//client.jar",
+                "nested/ /client.jar",
+                "nested/../client.jar",
+                "nested/./client.jar",
+                "nested/../../client.jar",
+                "nested/client.jar/",
+                ".",
+                "   ")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> new ClientJarRef(path), path);
+        }
+        assertThrows(NullPointerException.class, () -> new ClientJarRef(null));
+    }
+
+    @Test
     void planAndClientJarReferenceAreImmutableValues() {
         var plan = ClasspathAssembler.assemble(
-                inputs(), new ClientJarRef("  versions/client.jar  "));
+                inputs(), new ClientJarRef("  " + MODERN_CLIENT_JAR + "  "));
 
-        assertEquals("versions/client.jar", plan.entries().getFirst());
+        assertEquals(MODERN_CLIENT_JAR, plan.entries().getFirst());
+        assertEquals(Optional.of(MODERN_CLIENT_JAR), plan.clientJar());
         assertThrows(UnsupportedOperationException.class,
                 () -> plan.entries().add("other.jar"));
-        assertThrows(NullPointerException.class, () -> new ClientJarRef(null));
-        assertThrows(IllegalArgumentException.class, () -> new ClientJarRef("   "));
-        assertEquals("versions/client.jar", new ClientJarRef("versions/client.jar").path());
+        assertEquals(MODERN_CLIENT_JAR,
+                new ClientJarRef(MODERN_CLIENT_JAR).path());
     }
 
     @Test
     void nullArgumentsAreRejected() {
         assertThrows(NullPointerException.class,
-                () -> ClasspathAssembler.assemble(null, new ClientJarRef(CLIENT_JAR)));
+                () -> ClasspathAssembler.assemble(
+                        null, new ClientJarRef(MODERN_CLIENT_JAR)));
         assertThrows(NullPointerException.class,
                 () -> ClasspathAssembler.assemble(inputs(), null));
     }

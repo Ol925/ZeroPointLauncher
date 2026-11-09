@@ -7,6 +7,7 @@ import java.util.Optional;
  * 版本清单中声明的 Maven 坐标。
  * <p>
  * 纯值对象：只描述坐标本身与标准仓库相对布局，不访问磁盘、不拼接平台路径分隔符。
+ * 所有字段在构造时执行相对路径安全校验，禁止生成越界路径。
  */
 public record MavenCoordinate(
         String groupId,
@@ -23,13 +24,20 @@ public record MavenCoordinate(
         Objects.requireNonNull(version, "version");
         Objects.requireNonNull(classifier, "classifier");
         Objects.requireNonNull(extension, "extension");
+
+        groupId = requireSafeGroupId(groupId);
+        artifactId = RelativePathRules.requireSafeSegment(artifactId, "artifactId");
+        version = RelativePathRules.requireSafeSegment(version, "version");
+        classifier = classifier.map(value ->
+                RelativePathRules.requireSafeSegment(value, "classifier"));
+        extension = RelativePathRules.requireSafeSegment(extension, "extension");
     }
 
     /**
      * 解析形如 {@code group:artifact:version[:classifier][@extension]} 的坐标字符串。
      * <p>
-     * 扩展名缺省为 {@code jar}；空组件、缺少必需字段或多余字段都会抛出
-     * {@link IllegalArgumentException}，避免把错误坐标静默推导成无效路径。
+     * 扩展名缺省为 {@code jar}；空组件、缺少必需字段、多余字段或任何越界路径片段
+     * 都会抛出 {@link IllegalArgumentException}，避免把错误坐标静默推导成无效路径。
      */
     public static MavenCoordinate parse(String rawCoordinate) {
         Objects.requireNonNull(rawCoordinate, "rawCoordinate");
@@ -84,6 +92,21 @@ public record MavenCoordinate(
         classifier.ifPresent(value -> path.append('-').append(value));
         path.append('.').append(extension);
         return path.toString();
+    }
+
+    private static String requireSafeGroupId(String value) {
+        String normalized = value.strip();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("groupId 不能为空");
+        }
+
+        String[] segments = normalized.split("\\.", -1);
+        var safeSegments = new String[segments.length];
+        for (int i = 0; i < segments.length; i++) {
+            safeSegments[i] = RelativePathRules.requireSafeSegment(
+                    segments[i], "groupId 段");
+        }
+        return String.join(".", safeSegments);
     }
 
     private static String requireComponent(String value, String component, String rawCoordinate) {
